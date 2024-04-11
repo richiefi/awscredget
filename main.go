@@ -46,16 +46,44 @@ func printWhoami(ctx context.Context, client *sts.Client) error {
 	return nil
 }
 
-const (
-	outFmtText  = iota
-	outFmtShell = iota
-	outFmtJson  = iota
-)
+func printCredsText(creds types.Credentials) {
+	fmt.Printf("%s %s %s\n",
+		*creds.AccessKeyId,
+		*creds.SecretAccessKey,
+		*creds.SessionToken)
+}
+
+func printCredsShell(creds types.Credentials) {
+	fmt.Printf(`export AWS_ACCESS_KEY_ID=%s
+export AWS_SECRET_ACCESS_KEY=%s
+export AWS_SESSION_TOKEN=%s
+`,
+		shellescape.Quote(*creds.AccessKeyId),
+		shellescape.Quote(*creds.SecretAccessKey),
+		shellescape.Quote(*creds.SessionToken))
+}
+
+func printCredsJson(creds types.Credentials) {
+	// Compatible with aws sts get-session-token
+	jsonData := map[string]interface{}{
+		"Credentials": map[string]string{
+			"AccessKeyId":     *creds.AccessKeyId,
+			"SecretAccessKey": *creds.SecretAccessKey,
+			"SessionToken":    *creds.SessionToken,
+			"Expiration": creds.Expiration.Format(
+				time.RFC3339),
+		},
+	}
+	jsonOut, err := json.Marshal(jsonData)
+	if err != nil {
+		panic("JSON marshaling failed: " + err.Error())
+	}
+	fmt.Println(string(jsonOut))
+}
 
 func main() {
 	var duration int
-	var outfmtStr string
-	var assumeRole string
+	var outfmtStr, assumeRole string
 	var whoamiMode bool
 
 	flag.IntVar(&duration, "d", 1800,
@@ -76,14 +104,14 @@ func main() {
 			"seconds")
 	}
 
-	var outfmt int
+	var outfmt func(types.Credentials)
 	switch outfmtStr {
 	case "text":
-		outfmt = outFmtText
+		outfmt = printCredsText
 	case "sh":
-		outfmt = outFmtShell
+		outfmt = printCredsShell
 	case "json":
-		outfmt = outFmtJson
+		outfmt = printCredsJson
 	default:
 		log.Fatal("unknown output format: ", outfmtStr)
 	}
@@ -96,6 +124,7 @@ func main() {
 
 	client := sts.NewFromConfig(cfg)
 
+	// Special mode: print current identity and exit
 	if whoamiMode {
 		err = printWhoami(context.WithoutCancel(ctx),
 			client)
@@ -130,35 +159,5 @@ func main() {
 		creds = *assumeResp.Credentials
 	}
 
-	switch outfmt {
-	case outFmtShell:
-		fmt.Printf(`export AWS_ACCESS_KEY_ID=%s
-export AWS_SECRET_ACCESS_KEY=%s
-export AWS_SESSION_TOKEN=%s
-`,
-			shellescape.Quote(*creds.AccessKeyId),
-			shellescape.Quote(*creds.SecretAccessKey),
-			shellescape.Quote(*creds.SessionToken))
-	case outFmtJson:
-		// Compatible with aws sts get-session-token
-		jsonData := map[string]interface{}{
-			"Credentials": map[string]string{
-				"AccessKeyId":     *creds.AccessKeyId,
-				"SecretAccessKey": *creds.SecretAccessKey,
-				"SessionToken":    *creds.SessionToken,
-				"Expiration": creds.Expiration.Format(
-					time.RFC3339),
-			},
-		}
-		jsonOut, err := json.Marshal(jsonData)
-		if err != nil {
-			panic("JSON marshaling failed: " + err.Error())
-		}
-		fmt.Println(string(jsonOut))
-	case outFmtText:
-		fmt.Printf("%s %s %s\n",
-			*creds.AccessKeyId,
-			*creds.SecretAccessKey,
-			*creds.SessionToken)
-	}
+	outfmt(creds)
 }
